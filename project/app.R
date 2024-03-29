@@ -13,11 +13,11 @@ library(ggthemes)
 library(hrbrthemes)
 library(MASS)
 library(mgcv)
+library(leaflet)
 
 mpsz_SES_filtered <- read_rds("data/mpsz_SES_filtered_1.rds")
-data <- readRDS("data/SEO_TS.rds")
-data1 <- readRDS("data/helectricity.rds")
 conversion_long <- read_rds("data/conversion_long.rds")
+housedata <- readRDS("data/helectricity.rds")
 
 # Define UI for application that includes tabs
 ui <- fluidPage(
@@ -52,7 +52,7 @@ ui <- fluidPage(
                              label = "Electricity Generation:",
                              choices=list("Inputs"="Inputs",
                                           "Outputs"="Outputs",
-                                          "Conversion_rate"="Conversion_rate")),
+                                          "Conversion Rate"="Conversion_rate")),
                  selectInput(inputId = "fitting_method",
                              label = "Fitting Method:",
                              choices=list("lm"="lm",
@@ -67,20 +67,28 @@ ui <- fluidPage(
              )
     ),
     tabPanel("By Dwelling Type",
-             sidebarLayout(
-               sidebarPanel(
-                 selectInput("dwelling", "Dwelling Type",
-                             choices = unique(data1$dwellingtype))
+             fluidRow(
+               column(4,
+                      wellPanel(
+                        selectInput("dwellingType1", "Dwelling Type 1",
+                                    choices = unique(housedata$dwellingtype)),
+                        selectInput("dwellingType2", "Dwelling Type 2",
+                                    choices = unique(housedata$dwellingtype)),
+                        selectInput("year", "Year",
+                                    choices = unique(housedata$year))
+                      ),
+                      plotlyOutput("boxplot") # Plotly Boxplot output
                ),
-               mainPanel(
-                 tabPanel("Monthly Plot", plotlyOutput("monthlyPlot"))
+               column(8,
+                      plotOutput("cyclePlot1"),
+                      plotOutput("cyclePlot2")
                )
              )
     ),
     tabPanel("By Region",
              sidebarLayout(
                sidebarPanel(
-                 selectInput("dwelling", "Dwelling Type:", choices = unique(mpsz_SES_filtered$dwelling_type)),
+                 selectInput("dwelling_type", "Dwelling Type:", choices = unique(mpsz_SES_filtered$dwelling_type)),
                  selectInput("year", "Year:", choices = unique(mpsz_SES_filtered$year)),
                  selectInput("month", "Month:", choices = unique(mpsz_SES_filtered$month)),
                  selectInput(inputId = "classification",
@@ -111,18 +119,14 @@ ui <- fluidPage(
                )
              )
     ),
+    
     tabPanel("Time Series",
              sidebarLayout(
                sidebarPanel(
-                 selectInput("dwelling", "Region:", choices = unique(data$DWELLING_TYPE)),
-                 numericInput("forecast_months", "Number of Months to Forecast:", min = 1, max = 120, value = 12),
-                 selectInput("selected_model", "Select Model:", choices = c("ETS", "ARIMA")),
-                 actionButton("submit", "Submit")
+                 
                ),
                mainPanel(
-                 plotOutput("consumption_plot"),
-                 textOutput("mape_output"),
-                 textOutput("mae_output")
+                 
                )
              )
     )
@@ -158,126 +162,18 @@ server <- function(input, output) {
     
     elecmap <- tm_shape(filtered_data()) +
       tm_fill("kwh_per_acc", 
-              style = input$classification,  # Use the selected classification method
-              palette = input$colour,  # Use the selected color scheme
+              style = input$classification,
+              palette = input$colour,
               title = "Electricity Consumption by Percentile") +
-      tm_facets(by = c("year", "month"), ncol = 4) +
-      tm_layout(main.title = "Total Household Electricity Consumption by Percentile",
-                main.title.position = "center",
-                main.title.size = 1.2,
-                legend.height = 0.45, 
-                legend.width = 0.35,
-                frame = TRUE) +
-      tm_borders(alpha = 0.5) +
+      tm_borders() +
       tm_scale_bar() +
-      tm_grid(alpha = 0.2)
+      tm_grid()
     
     print(elecmap)
   })
+
   
-  #Time_Series
-  
-  # Initialize reactiveValues to store filtered data
-  data_filtered <- reactiveValues()
-  
-  # Update filtered data when submit button is clicked
-  observeEvent(input$submit, {
-    data_filtered$filtered_data <- data %>%
-      filter(DWELLING_TYPE == input$dwelling)
-  })
-  
-  # Function to calculate forecasts
-  calculate_forecasts <- function(data, method, h) {
-    data_ts <- tsibble(
-      Month_Year = yearmonth(paste(data$year, data$month)),
-      DWELLING_TYPE = data$DWELLING_TYPE,
-      Consumption_GWh = data$consumption_GWh,
-      index = Month_Year
-    )
-    
-    fit <- data_ts %>%
-      model(method = method)
-    fc <- fit %>%
-      forecast(h = h)
-    return(fc)
-  }
-  
-  # Reactive expression to generate forecasts
-  forecasts <- reactive({
-    # Check if filtered data is available
-    if (is.null(data_filtered$filtered_data)) {
-      return(NULL)
-    }
-    
-    # Calculate forecasts using selected method
-    method <- switch(input$selected_model,
-                     "ETS" = ETS(Consumption_GWh ~ error("A") + trend("N") + season("N")),
-                     "ARIMA" = ARIMA(Consumption_GWh))
-    calculate_forecasts(data_filtered$filtered_data, method, input$forecast_months)
-  })
-  
-  # Output plot
-  output$consumption_plot <- renderPlot({
-    if (!is.null(forecasts())) {
-      autoplot(forecasts())
-    } else {
-      plot(NULL, xlim = c(1, input$forecast_months), ylim = c(0, 1), 
-           xlab = "Month", ylab = "Consumption (GWh)", 
-           main = "Please click submit to generate forecast")
-    }
-  })
-  
-  # Output MAPE
-  output$mape_output <- renderText({
-    if (!is.null(forecasts())) {
-      actual_data <- na.omit(data_filtered$filtered_data$consumption_GWh)
-      forecast_data <- as.numeric(na.omit(forecasts()$point_forecast))
-      if (length(actual_data) == 0 || length(forecast_data) == 0) {
-        return("MAPE: N/A")
-      }
-      mape <- mean(abs((actual_data - forecast_data) / actual_data)) * 100
-      paste("MAPE:", round(mape, 2), "%")
-    } else {
-      "MAPE: N/A"
-    }
-  })
-  
-  # Output MAE
-  output$mae_output <- renderText({
-    if (!is.null(forecasts())) {
-      actual_data <- na.omit(data_filtered$filtered_data$consumption_GWh)
-      forecast_data <- as.numeric(na.omit(forecasts()$point_forecast))
-      if (length(actual_data) == 0 || length(forecast_data) == 0) {
-        return("MAE: N/A")
-      }
-      mae <- mean(abs(actual_data - forecast_data))
-      paste("MAE:", round(mae, 2))
-    } else {
-      "MAE: N/A"
-    }
-  })
-  
-  #Dwelling_Type_Plot
-  
-  filtered_data_1 <- reactive({
-    data1 %>% filter(dwellingtype == input$dwelling)
-  })
-  
-  ts_data <- reactive({
-    xts(filtered_data_1()[,c("consumptionGWh")], order.by=as.Date(filtered_data_1()$tdate))
-  })
-  
-  output$monthlyPlot <- renderPlotly({
-    p <- ggplot(ts_data(), aes(x = Index, y = consumptionGWh)) + 
-      geom_line() + theme_clean() +
-      labs(title = "Monthly Household Electricity Consumption", caption = "Data from EMA") +
-      xlab("Month-Year") +
-      ylab("Consumption in GWh") +
-      theme_ipsum_rc()
-    ggplotly(p)
-  })
-  
-  # Electricity_Generation_Plot
+  # Tab 1 - Electricity_Generation_Plot
   generateion_filtered <- reactive({
     conversion_long %>% filter(Generation==input$Generation)
   })
@@ -293,7 +189,91 @@ server <- function(input, output) {
       theme_ipsum_rc()
     ggplotly(p2)
   })
+  
+  #Tab 2 - Dwelling_Type_Plot
+  # Generate the boxplot
+  filteredData <- reactive({
+    housedata %>% 
+      filter(dwellingtype %in% c(input$dwellingType1, input$dwellingType2), 
+             year == input$year)
+  })
+  
+  output$boxplot <- renderPlotly({
+    ggplotly(
+      ggplot(filteredData(), aes(x = dwellingtype, y = consumptiongwh, fill = dwellingtype)) +
+        geom_boxplot() +
+        theme_minimal() +
+        labs(x = "Dwelling Type", y = "Consumption (GWh)", title = paste(input$year, "Box Plot of", input$dwellingType1, "&", input$dwellingType2)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none", plot.title = element_text(size = 10, face = "bold"))
+    )
+  })
+  
+  # Generate the cycle plots
+  cycleData1 <- reactive({
+    df <- housedata %>%
+      filter(dwellingtype == input$dwellingType1)
+    df$month <- factor(df$month, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"))
+    return(df)
+  })
+  
+  
+  cycleData2 <- reactive({
+    df <- housedata %>%
+      filter(dwellingtype == input$dwellingType2)
+    df$month <- factor(df$month, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"))
+    return(df)
+  })
+  
+  
+  hlineData1 <- reactive({
+    cycleData1() %>%
+      group_by(month) %>%
+      summarise(avgvalue = mean(consumptiongwh, na.rm = TRUE))
+  })
+  
+  hlineData2 <- reactive({
+    cycleData2() %>%
+      group_by(month) %>%
+      summarise(avgvalue = mean(consumptiongwh, na.rm = TRUE))
+  })
+  
+  output$cyclePlot1 <- renderPlot({
+    df_filtered <- cycleData1()
+    hline_mean_consumption.data <- hlineData1()
+    
+    ggplot(df_filtered, aes(x = year, y = consumptiongwh, group = month, color = month)) +
+      geom_line() +
+      geom_hline(data = hline_mean_consumption.data, aes(yintercept = avgvalue), 
+                 linetype = 6, color = "red", size = 0.5) +
+      facet_wrap(~month, scales = "free_x") +
+      labs(title = paste("Cycle Plot for", input$dwellingType1)) +
+      xlab("") +
+      ylab("Consumption (GWh)") +
+      theme_tufte(base_family = "Helvetica") + 
+      theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 7), plot.title = element_text(size = 15, face = "bold"))
+  })
+  
+  output$cyclePlot2 <- renderPlot({
+    df_filtered <- cycleData2()
+    hline_mean_consumption.data <- hlineData2()
+    
+    ggplot(df_filtered, aes(x = year, y = consumptiongwh, group = month, color = month)) +
+      geom_line() +
+      geom_hline(data = hline_mean_consumption.data, aes(yintercept = avgvalue), 
+                 linetype = 6, color = "red", size = 0.5) +
+      facet_wrap(~month, scales = "free_x") +
+      labs(title = paste("Cycle Plot for", input$dwellingType2)) +
+      xlab("") +
+      ylab("Consumption (GWh)") +
+      theme_tufte(base_family = "Helvetica") + 
+      theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 7), plot.title = element_text(size = 15, face = "bold"))
+  })
+  
+
+ 
 }
+
+
 
 # Run the application
 shinyApp(ui = ui, server = server)
