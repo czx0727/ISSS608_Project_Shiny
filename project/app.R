@@ -11,13 +11,13 @@ library(plotly)
 library(xts)
 library(ggthemes)
 library(hrbrthemes)
-
+library(MASS)
+library(mgcv)
 
 mpsz_SES_filtered <- read_rds("data/mpsz_SES_filtered_1.rds")
 data <- readRDS("data/SEO_TS.rds")
 data1 <- readRDS("data/helectricity.rds")
-
-
+conversion_long <- read_rds("data/conversion_long.rds")
 
 # Define UI for application that includes tabs
 ui <- fluidPage(
@@ -48,10 +48,21 @@ ui <- fluidPage(
     tabPanel("Overview",
              sidebarLayout(
                sidebarPanel(
-                 # Add inputs for Tab 1
+                 selectInput(inputId = "Generation",
+                             label = "Electricity Generation:",
+                             choices=list("Inputs"="Inputs",
+                                          "Outputs"="Outputs",
+                                          "Conversion_rate"="Conversion_rate")),
+                 selectInput(inputId = "fitting_method",
+                             label = "Fitting Method:",
+                             choices=list("lm"="lm",
+                                          "glm"="glm",
+                                          "loess"="loess",
+                                          "gam"="gam",
+                                          "rlm"="rlm"))
                ),
                mainPanel(
-                 # Add outputs for Tab 1
+                 plotlyOutput("generation_plot")
                )
              )
     ),
@@ -264,6 +275,23 @@ server <- function(input, output) {
       ylab("Consumption in GWh") +
       theme_ipsum_rc()
     ggplotly(p)
+  })
+  
+  # Electricity_Generation_Plot
+  generateion_filtered <- reactive({
+    conversion_long %>% filter(Generation==input$Generation)
+  })
+  
+  output$generation_plot <- renderPlotly({
+    p2 <- ggplot(generateion_filtered(),
+                 aes(x = Year, y=Amount_ratio))+
+      geom_line()+theme_clean()+
+      geom_smooth(method=input$fitting_method)+
+      labs(title = "Yearly Electricity Generation", caption = "Data from EMA") +
+      xlab("Year") +
+      ylab("Generation in GWh")+
+      theme_ipsum_rc()
+    ggplotly(p2)
   })
 }
 
