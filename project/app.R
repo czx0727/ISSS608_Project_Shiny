@@ -1,5 +1,5 @@
 pacman::p_load(tidyverse,tmap,fable,tsibble,ggplot2,lubridate,feasts,plotly,xts,ggthemes,hrbrthemes,
-               MASS,mgcv,DT,forecast,tseries,DT)
+               MASS,mgcv,DT,forecast,tseries,DT,ggstatsplot,shinyWidgets)
 
 library(shiny)
 
@@ -39,6 +39,28 @@ ui <- fluidPage(
   ),
   
   tabsetPanel(
+    tabPanel("CDA",
+             sidebarLayout(
+               sidebarPanel(
+                 radioButtons("dwellingTypeCDA", "Choose Dwelling Type:",
+                              choices = unique(housedata$dwellingtype)),
+                 pickerInput("yearInput", "Select Year(s):", 
+                             choices = unique(housedata$year), 
+                             selected = c("2022", "2023"),  # Default to the most recent two years
+                             multiple = TRUE, 
+                             options = list(`actions-box` = TRUE)),  # Enable buttons to select/unselect all
+                 radioButtons("testType", "Choose Statistical Test:",
+                              choices = c("Parametric" = "parametric",
+                                          "Non-parametric" = "nonparametric",
+                                          "Robust" = "robust",
+                                          "Bayes" = "bayes"))
+               ),
+               
+               mainPanel(
+                 plotOutput("plot")
+               )
+             )
+    ),
     tabPanel("Overview",
              fluidRow(
                column(2,
@@ -47,7 +69,7 @@ ui <- fluidPage(
                                     label = "Electricity Generation:",
                                     choices=list("Inputs"="Inputs",
                                                  "Outputs"="Outputs",
-                                                 "Conversion Rate"="Conversion_rate")),
+                                                 "Conversion_rate"="Conversion_rate")),
                         selectInput(inputId = "fitting_method",
                                     label = "Fitting Method:",
                                     choices=list("lm"="lm",
@@ -192,7 +214,75 @@ server <- function(input, output) {
     print(elecmap)
   })
   
-  # Tab 1 - Electricity_Generation_Plot
+  # Tab 1 - CDA
+  output$plot <- renderPlot({
+    # Filter the data based on the selected dwelling type and years
+    filtered_data <- housedata[housedata$dwellingtype == input$dwellingTypeCDA &
+                                 housedata$year %in% input$yearInput, ]
+    
+    # Create the plot based on the selected test type
+    if(input$testType == "parametric") {
+      ggbetweenstats(
+        data = filtered_data,
+        x = "year",
+        y = "consumptiongwh",
+        xlab = "Year",
+        ylab = "Electricity Consumption (GWh)",
+        violin.args = list(width = 0),
+        type = "p",
+        conf.level = 0.99,
+        title = "Parametric Test",
+        package = "ggsci",
+        palette = "nrc_npg"
+      )
+    } else if(input$testType == "nonparametric") {
+      ggbetweenstats(
+        data = filtered_data,
+        x = "year",
+        y = "consumptiongwh",
+        xlab = "Year",
+        ylab = "Electricity Consumption (GWh)",
+        boxplot.args = list(width = 0),
+        type = "np",
+        conf.level = 0.99,
+        title = "Non-parametric Test",
+        package = "ggsci",
+        palette = "uniform_startrek"
+      )
+    } else if(input$testType == "robust") {
+      ggbetweenstats(
+        data = filtered_data,
+        x = "year",
+        y = "consumptiongwh",
+        xlab = "Year",
+        ylab = "Electricity Consumption (GWh)",
+        type = "r",
+        conf.level = 0.99,
+        title = "Robust Test",
+        tr = 0.005,
+        package = "wesanderson",
+        palette = "Royal2",
+        digits = 3
+      )
+    } else if(input$testType == "bayes") {
+      ggbetweenstats(
+        data = filtered_data,
+        x = "year",
+        y = "consumptiongwh",
+        xlab = "Year",
+        ylab = "Electricity Consumption (GWh)",
+        type = "bayes",
+        violin.args = list(width = 0),
+        boxplot.args = list(width = 0),
+        point.args = list(alpha = 0),
+        title = "Bayesian Test",
+        package = "ggsci",
+        palette = "nrc_npg"
+      )
+    }
+  })
+  
+  # Tab 2 - Electricity_Generation_Plot
   generateion_filtered <- reactive({
     conversion_long %>% filter(Generation==input$Generation)
   })
@@ -214,63 +304,38 @@ server <- function(input, output) {
   })
   
   # Sector_plot
-  # output$bubble_plot <- renderPlotly({
-  #   
-  #   years <- sort(unique(consump_account$Year))
-  #   
-  #   consump_account <- consump_account %>%
-  #     filter(sector %in% input$Sector)
-  #   
-  #   axis_ranges <- consump_account %>% 
-  #     group_by(sector) %>%
-  #     summarise(
-  #       x_min = min(Account_number, na.rm = TRUE),
-  #       x_max = max(Account_number, na.rm = TRUE),
-  #       y_min = 0,
-  #       y_max = max(consumption, na.rm = TRUE)
-  #     )
-  #   
-  #   plots <- split(consump_account, consump_account$sector) %>%
-  #     imap(~ {
-  #       data <- .x
-  #       sector_name <- .y
-  #       x_range <- c(axis_ranges %>% filter(sector == sector_name) %>% pull(x_min),
-  #                    axis_ranges %>% filter(sector == sector_name) %>% pull(x_max))
-  #       y_range <- c(axis_ranges %>% filter(sector == sector_name) %>% pull(y_min),
-  #                    axis_ranges %>% filter(sector == sector_name) %>% pull(y_max))
-  #       
-  #       p <- plot_ly(data = data, 
-  #                    x = ~Account_number, 
-  #                    y = ~consumption, 
-  #                    frame = ~year,
-  #                    text=~paste("Sub_sector:",sub_sector, 
-  #                                "<br>No. of Accounts:",Account_number,
-  #                                "<br>Consumption:",consumption),
-  #                    hoverinfo="text",
-  #                    type = 'scatter', 
-  #                    mode = 'markers',
-  #                    color = ~sub_sector) %>%
-  #         layout(showlegend=FALSE,
-  #                hovermode="closest",
-  #                title = list(text=paste("Electricity Consumption in", sector_name),
-  #                             font = list(size=12)),
-  #                xaxis = list(title = "Number of Accounts", range = x_range,
-  #                             tickfont = list(size = 8)),
-  #                yaxis = list(title = "Consumption(GWh)",range = y_range,
-  #                             tickfont = list(size = 8)))
-  #     })
-  #   
-  #   num_plots <- length(plots)
-  #   
-  #   final_plot <- subplot(plots, nrows = num_plots, 
-  #                         shareX = FALSE, shareY = FALSE,
-  #                         margin = 0.05) %>%
-  #     animation_slider(frame = years, transition = list(duration = 0), 
-  #                      currentvalue = list(prefix = "Year: "))
-  #   
-  #   final_plot})
+  output$bubble_plot <- renderPlotly({
+    
+    years <- sort(unique(consump_account$Year))
+    
+    consump_account_filtered <- consump_account %>%
+      filter(sector %in% input$Sector)
+    
+    p <- plot_ly(data = consump_account_filtered, 
+                 x = ~Account_number, 
+                 y = ~consumption, 
+                 type = 'scatter', 
+                 mode = 'markers',
+                 frame = ~year, 
+                 color = ~sub_sector, 
+                 text = ~paste("Sub-sector:", sub_sector, "Year:", 
+                               year,"<br>No. of Accounts:", Account_number, 
+                               "<br>Consumption:", consumption),
+                 hoverinfo = "text",
+                 size=2,
+                 showlegend = FALSE) %>%
+      layout(title = list(text=paste("Electricity Consumption in", input$Sector),
+                          font = list(size = 12)), 
+             xaxis = list(title = "No. of Accounts",
+                          font = list(size = 8)),
+             yaxis = list(title = "Consumption (GWh)",
+                          font = list(size = 8)), 
+             margin = list(b = 40, l = 60, t = 30, r = 0))
+    final_plot <- animation_slider(p, frame = ~years, transition = list(duration = 0),
+                                   currentvalue = list(prefix = "Year: "), hide = TRUE)
+    final_plot})
   
-  #Tab 3 - Timeseries
+  #Tab 4 - Timeseries
   # Filtered data based on user selection
   filteredData <- reactive({
     req(input$dwellingType)
@@ -334,7 +399,7 @@ server <- function(input, output) {
     })
   })
   
-  #Tab 4 - Dwelling_Type_Plot
+  #Tab 5 - Dwelling_Type_Plot
   # Generate the boxplot
   filteredDataBox <- reactive({
     housedata %>% 
